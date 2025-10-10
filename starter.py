@@ -196,8 +196,9 @@ def reward_fn(generated_text: str, ground_truth: Dict) -> float:
         A float value representing the reward, such as 1.0, 0.1, or 0.0
     """
     ### YOUR CODE HERE ###
-    if _extract_answer(generated_text) is not None:
-        if _evaluate_equation(generated_text) == ground_truth["target"]:
+    answer = _extract_answer(generated_text)
+    if answer is not None:
+        if _evaluate_equation(answer) == ground_truth["target"]:
             return 1.0
         return 0.1
     return 0.0
