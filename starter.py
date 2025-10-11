@@ -335,7 +335,7 @@ def compute_group_normalized_advantages(
     group_means = torch.mean(raw_rewards, dim=1)
     advantages = raw_rewards - group_means.unsqueeze(1)
     if normalize_by_std:
-        advantages = advantages / (torch.std(advantages, dim=1) + advantage_eps)
+        advantages = advantages / (torch.std(advantages, dim=1, keepdim=True) + advantage_eps)
     advantages = advantages.flatten()
     metadata = {
         "mean": torch.mean(raw_rewards),
