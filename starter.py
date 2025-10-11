@@ -358,12 +358,12 @@ def compute_loss(
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     """
     Computes the per-token PPO clipped surrogate loss.
-
+    
     Why omit the KL divergence term?
     For simplicity and following trends in recent RLVR (e.g Dr.GRPO),
     we omit the KL penalty term often found in PPO. This simplifies the implementation
     and has been shown to work well in practice.
-
+    
     Steps:
     1. Calculate the probability ratio `pi_ratio = exp(policy_log_probs - old_log_probs)`.
     2. Calculate the unclipped term: `advantages * pi_ratio`.
@@ -371,15 +371,20 @@ def compute_loss(
        and then multiplying by `advantages`.
     4. The final loss is `-torch.minimum(unclipped_term, clipped_term)`.
     """
-    loss = 0.0
+    
     ### YOUR CODE HERE ###
     pi_ratio = torch.exp(policy_log_probs - old_log_probs)
     unclipped_term = advantages * pi_ratio
-    clipped_term = advantages * torch.clamp(pi_ratio, 1-clip_range, 1+clip_range)
+    clipped_term = advantages * torch.clamp(pi_ratio, 1 - clip_range, 1 + clip_range)
+    
+    # PPO loss is the negative minimum of the unclipped and clipped terms
     loss = -torch.minimum(unclipped_term, clipped_term)
+    
+    # The function signature requires a tuple of (loss, metadata_dict).
+    # We return the loss and an empty dictionary as the metadata.
+    metadata = {}
+    return loss, metadata
     ### END YOUR CODE ###
-    return loss
-
 
 def masked_mean(tensor: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     """
