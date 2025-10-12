@@ -482,11 +482,10 @@ def tokenize_rollouts(rollout_input_text: List[str], rollout_response_text: List
 
 def grpo_microbatch_step(
     policy: PreTrainedModel, input_ids: torch.Tensor, labels: torch.Tensor, response_mask: torch.Tensor,
-    advantages_per_seq: torch.Tensor, gradient_accumulation_steps: int, clip_range: float,
+    advantages_per_seq: torch.Tensor, old_log_probs: torch.Tensor, gradient_accumulation_steps: int, clip_range: float,
     loss_type: str = "grpo", max_completion_length: int = 256,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     policy_log_probs = get_response_log_probs(policy, input_ids, labels)
-    old_log_probs = policy_log_probs.detach()
     advantages = advantages_per_seq.unsqueeze(-1)
     loss_per_token, metadata = compute_loss(advantages, policy_log_probs, old_log_probs, clip_range)
     
@@ -540,6 +539,11 @@ def train(
             rollout_response, answers_dup, reward_fn, group_size, advantage_eps, use_std_normalization
         )
         tokenized = tokenize_rollouts(rollout_input, rollout_response, tokenizer)
+        
+        # Compute reference log probs BEFORE any gradient updates (this is the "old" policy)
+        with torch.no_grad():
+            ref_log_probs = get_response_log_probs(policy, tokenized["input_ids"].to(device), tokenized["labels"].to(device))
+        
         optimizer.zero_grad()
         rollout_loss = 0.0
         
@@ -553,7 +557,7 @@ def train(
             
             loss, _ = grpo_microbatch_step(
                 policy, tokenized["input_ids"][s].to(device), tokenized["labels"][s].to(device),
-                tokenized["response_mask"][s].to(device), advantages[s].to(device),
+                tokenized["response_mask"][s].to(device), advantages[s].to(device), ref_log_probs[s].to(device),
                 gradient_accumulation_steps, clip_range, loss_type=loss_type, max_completion_length=max_completion_length
             )
             
