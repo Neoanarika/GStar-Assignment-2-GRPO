@@ -541,8 +541,16 @@ def train(
         tokenized = tokenize_rollouts(rollout_input, rollout_response, tokenizer)
         
         # Compute reference log probs BEFORE any gradient updates (this is the "old" policy)
+        # Do it in microbatches to avoid OOM
+        ref_log_probs_list = []
         with torch.no_grad():
-            ref_log_probs = get_response_log_probs(policy, tokenized["input_ids"].to(device), tokenized["labels"].to(device))
+            for micro_idx in range(0, rollout_batch_size, micro_train_batch_size):
+                s = slice(micro_idx, micro_idx + micro_train_batch_size)
+                ref_log_probs_micro = get_response_log_probs(
+                    policy, tokenized["input_ids"][s].to(device), tokenized["labels"][s].to(device)
+                )
+                ref_log_probs_list.append(ref_log_probs_micro.cpu())
+            ref_log_probs = torch.cat(ref_log_probs_list, dim=0)
         
         optimizer.zero_grad()
         rollout_loss = 0.0
