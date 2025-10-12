@@ -158,8 +158,13 @@ def _validate_numbers(equation_str: str, available_numbers: List[int]) -> bool:
         True if the equation uses the correct numbers, False otherwise.
     """
     ### YOUR CODE HERE ###
-    matches = list(re.findall(r'\d+', equation_str))
-    return set(matches) == set(available_numbers)
+    try:
+        # Extract all numbers from the equation and convert to integers
+        equation_numbers = [int(n) for n in re.findall(r"\d+", equation_str)]
+        # Sort both lists to compare
+        return sorted(equation_numbers) == sorted(available_numbers)
+    except:
+        return False
     ### END YOUR CODE ###
 
 
@@ -197,11 +202,16 @@ def reward_fn(generated_text: str, ground_truth: Dict) -> float:
     """
     ### YOUR CODE HERE ###
     answer = _extract_answer(generated_text)
-    if answer is not None:
-        if _evaluate_equation(answer) == ground_truth["target"]:
+    if answer is None:
+        return 0.0
+    
+    # Check if equation uses correct numbers and evaluates to target
+    if _validate_numbers(answer, ground_truth["numbers"]):
+        result = _evaluate_equation(answer)
+        if result is not None and abs(result - ground_truth["target"]) < 1e-6:
             return 1.0
-        return 0.1
-    return 0.0
+    
+    return 0.1
     ### END YOUR CODE ###
 
 
@@ -330,19 +340,35 @@ def compute_group_normalized_advantages(
     # 7. Create a `metadata` dictionary with overall statistics of the raw rewards.
     advantages, raw_rewards, metadata = None, None, {}
     ### YOUR CODE HERE ###
-    raw_rewards = torch.tensor([reward_fn(response, ground_truth) for response, ground_truth in zip(rollout_responses, repeated_ground_truths)])
-    raw_rewards = raw_rewards.reshape(-1, group_size)
+    # 1. Calculate raw rewards for each response
+    raw_rewards_flat = torch.tensor([reward_fn(response, ground_truth) for response, ground_truth in zip(rollout_responses, repeated_ground_truths)])
+    
+    # 2. Reshape to (batch_size, group_size) for group-wise operations
+    raw_rewards = raw_rewards_flat.reshape(-1, group_size)
+    
+    # 3. Calculate mean reward for each group
     group_means = torch.mean(raw_rewards, dim=1)
+    
+    # 4. Compute advantages by subtracting group mean
     advantages = raw_rewards - group_means.unsqueeze(1)
+    
+    # 5. Normalize by std if required
     if normalize_by_std:
-        advantages = advantages / (torch.std(advantages, dim=1, keepdim=True) + advantage_eps)
+        group_std = torch.std(raw_rewards, dim=1, keepdim=True)
+        advantages = advantages / (group_std + advantage_eps)
+    
+    # 6. Flatten advantages back to 1D
     advantages = advantages.flatten()
+    
+    # 7. Create metadata with overall statistics
     metadata = {
-        "mean": torch.mean(raw_rewards),
-        "std": torch.std(raw_rewards),
-        "max": torch.max(raw_rewards),
-        "min": torch.min(raw_rewards),
+        "mean": torch.mean(raw_rewards_flat),
+        "std": torch.std(raw_rewards_flat),
+        "max": torch.max(raw_rewards_flat),
+        "min": torch.min(raw_rewards_flat),
     }
+    
+    raw_rewards = raw_rewards_flat
     ### END YOUR CODE ###
     return advantages, raw_rewards, metadata
 
@@ -391,7 +417,11 @@ def masked_mean(tensor: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     Compute the mean of tensor values where mask=True for each row, then average across the batch.
     """
     ### YOUR CODE HERE ###
-    return torch.mean(tensor[mask])
+    # Compute mean for each row where mask is True, then average across batch
+    row_sums = (tensor * mask).sum(dim=1)
+    row_counts = mask.sum(dim=1)
+    row_means = row_sums / row_counts.clamp(min=1)  # Avoid division by zero
+    return row_means.mean()
     ### END YOUR CODE ###
 
 def masked_mean_drgrpo(tensor: torch.Tensor, mask: torch.Tensor, num_tokens: int) -> torch.Tensor:
@@ -400,7 +430,9 @@ def masked_mean_drgrpo(tensor: torch.Tensor, mask: torch.Tensor, num_tokens: int
     This is used for the DR-GRPO loss
     """
     ### YOUR CODE HERE ###
-    return torch.mean(tensor[mask]) / num_tokens
+    # Sum masked values for each row, divide by num_tokens, then average across batch
+    row_sums = (tensor * mask).sum(dim=1)
+    return (row_sums / num_tokens).mean()
     ### END YOUR CODE ###
 
 def get_response_log_probs(model: PreTrainedModel, input_ids: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
