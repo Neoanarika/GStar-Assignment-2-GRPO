@@ -263,6 +263,13 @@ def log_train(rollout_batch_loss: float, grad_norm: float, reward_metadata: Dict
     writer.add_scalar("train/reward_mean", float(reward_metadata["mean"]), global_step=step)
     writer.add_scalar("train/reward_std", float(reward_metadata["std"]), global_step=step)
     writer.add_scalar("train/avg_output_tokens", float(avg_output_tokens), global_step=step)
+    # Calculate accuracy from rewards (rewards of 1.0 = correct, 0.1 = partial, 0.0 = failed)
+    if "raw_rewards" in reward_metadata:
+        raw_rewards = reward_metadata["raw_rewards"]
+        correct_count = (raw_rewards == 1.0).sum().item()
+        total_count = len(raw_rewards)
+        accuracy = (correct_count / total_count) * 100 if total_count > 0 else 0.0
+        writer.add_scalar("train/accuracy", accuracy, global_step=step)
     print(f"Step {step} | Loss: {rollout_batch_loss:.4f} | Grad norm: {grad_norm:.4f} | Reward mean: {float(reward_metadata['mean']):.4f} | Reward std: {float(reward_metadata['std']):.4f} | Avg output tokens: {avg_output_tokens:.1f}")
 
 
@@ -508,9 +515,10 @@ def train(
         rollout_input, rollout_response, rollout_tokens = rollout_with_vllm(policy, llm, sampling_params, prompts_batch, group_size)
         answers_dup = duplicate_data(answers_batch, group_size)
         avg_output_tokens = sum(rollout_tokens) / len(rollout_tokens) if rollout_tokens else 0.0
-        advantages, _, reward_meta = compute_group_normalized_advantages(
+        advantages, raw_rewards, reward_meta = compute_group_normalized_advantages(
             rollout_response, answers_dup, reward_fn, group_size, advantage_eps, use_std_normalization
         )
+        reward_meta["raw_rewards"] = raw_rewards
         tokenized = tokenize_rollouts(rollout_input, rollout_response, tokenizer)
         optimizer.zero_grad()
         rollout_loss = 0.0
@@ -530,6 +538,15 @@ def train(
         print(f"Step {train_step} | Loss: {rollout_loss:.4f} | Grad: {grad_norm:.4f} | "
               f"Reward mean: {reward_meta['mean']:.4f} | Reward std: {reward_meta['std']:.4f}")
         log_train(rollout_loss, grad_norm, reward_meta, avg_output_tokens, writer, train_step)
+        
+        # Log accuracy every training step by evaluating on a small subset
+        if writer and train_step % 5 == 0:  # Evaluate every 5 steps to avoid too much overhead
+            eval_subset_size = min(32, len(eval_prompts))  # Use smaller subset for frequent evaluation
+            subset_indices = random.sample(range(len(eval_prompts)), eval_subset_size)
+            subset_prompts = [eval_prompts[i] for i in subset_indices]
+            subset_answers = [eval_answers[i] for i in subset_indices]
+            subset_metrics = evaluate_model(llm, sampling_params, subset_prompts, subset_answers)
+            writer.add_scalar("train/accuracy", subset_metrics["accuracy"], global_step=train_step)
         if train_step % eval_every == 0:
             metrics = evaluate_model(llm, sampling_params, eval_prompts, eval_answers)
             log_eval(metrics, writer, train_step)
